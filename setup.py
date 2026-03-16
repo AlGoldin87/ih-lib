@@ -1,4 +1,3 @@
-# setup.py
 from setuptools import setup, find_packages
 from pybind11.setup_helpers import Pybind11Extension
 import os
@@ -11,7 +10,7 @@ VERSION = "0.1.0"
 ext_modules = [
     Pybind11Extension(
         f"{LIB_NAME}._core",
-        ["src/entropy_core.cpp", "src/entropy_module.cpp"],
+        ["src/entropy_core.cpp", "src/entropy_module.cpp", "src/rule_finder.cpp"],
         include_dirs=["include"],
         cxx_std=17,
     ),
@@ -22,7 +21,7 @@ setup(
     version=VERSION,
     author="Your Name",
     description="Information-Entropy analysis library",
-    long_description=open("README.md").read() if os.path.exists("README.md") else "",
+    long_description=open("README.md", encoding="utf-8").read() if os.path.exists("README.md") else "",
     long_description_content_type="text/markdown",
     ext_modules=ext_modules,
     packages=[LIB_NAME],
