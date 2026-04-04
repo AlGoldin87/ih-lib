@@ -127,10 +127,12 @@ std::vector<int> binarize_y(
     size_t rows = raw_data.size();
     std::vector<int> y_bin(rows);
     
+    // Исправление 1: epsilon для проверки бинарности
+    const double eps = 1e-9;
     bool already_binary = true;
     for (size_t i = 0; i < rows; i++) {
         double val = raw_data[i][y_idx];
-        if (val != 0.0 && val != 1.0) {
+        if (std::abs(val - 0.0) > eps && std::abs(val - 1.0) > eps) {
             already_binary = false;
             break;
         }
@@ -143,7 +145,8 @@ std::vector<int> binarize_y(
     } else {
         for (size_t i = 0; i < rows; i++) {
             double val = raw_data[i][y_idx];
-            y_bin[i] = (val > low && val < high) ? 1 : 0;
+            // Исправление 2: нестрогие неравенства
+            y_bin[i] = (val >= low && val <= high) ? 1 : 0;
         }
     }
     
