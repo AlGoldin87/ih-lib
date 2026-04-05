@@ -6,7 +6,7 @@
 #include <sstream>
 #include <limits>
 #include <chrono>
-#include <iostream>
+#include <fstream>
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ СТРУКТУРЫ ====================
 
@@ -66,7 +66,9 @@ double calc_entropy_internal(const std::vector<std::vector<int>>& data, const st
     auto end = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0;
     if (ms > 1.0) {
-        std::cout << "[PROFILE] calc_entropy_internal: " << ms << " ms, rows=" << n_rows << std::endl;
+        std::ofstream log("/tmp/ih_profile.log", std::ios::app);
+        log << "[PROFILE] calc_entropy_internal: " << ms << " ms, rows=" << n_rows << std::endl;
+        log.close();
     }
     
     return result;
@@ -329,7 +331,9 @@ BinarySplitResult evaluate_categorical_mask(
     auto end = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     if (ms > 100) {
-        std::cout << "[PROFILE] evaluate_categorical_mask: " << ms << " ms, categories=" << category_mask.size() << std::endl;
+        std::ofstream log("/tmp/ih_profile.log", std::ios::app);
+        log << "[PROFILE] evaluate_categorical_mask: " << ms << " ms, categories=" << category_mask.size() << std::endl;
+        log.close();
     }
     
     return res;
@@ -351,8 +355,11 @@ BinarySplitResult find_best_categorical(
     
     int n_combinations = (1 << n_categories) - 2;
     
-    std::cout << "[PROFILE] " << feature_name << ": n_categories=" << n_categories 
-              << ", combinations=" << n_combinations << std::endl;
+    std::ofstream log("/tmp/ih_profile.log", std::ios::app);
+    log << "[PROFILE] ========== START " << feature_name << " ==========" << std::endl;
+    log << "[PROFILE] " << feature_name << ": n_categories=" << n_categories 
+        << ", combinations=" << n_combinations << std::endl;
+    log.close();
     
     BinarySplitResult best;
     best.Rxy = -1.0;
@@ -374,18 +381,22 @@ BinarySplitResult find_best_categorical(
         auto subset_end = std::chrono::high_resolution_clock::now();
         double subset_ms = std::chrono::duration_cast<std::chrono::milliseconds>(subset_end - subset_start).count();
         
-        // Логируем каждую 5-ю комбинацию или если время > 1000 мс
-        if (processed % 5 == 0 || subset_ms > 1000) {
-            std::cout << "[PROFILE] " << feature_name << " subset " << processed << "/" << n_combinations 
-                      << ": " << subset_ms << " ms" << std::endl;
-        }
+        // Логируем каждую комбинацию (для категориальных их мало)
+        std::ofstream log2("/tmp/ih_profile.log", std::ios::app);
+        log2 << "[PROFILE] " << feature_name << " subset " << processed << "/" << n_combinations 
+             << ": " << subset_ms << " ms" << std::endl;
+        log2.close();
         
         if (res.Rxy > best.Rxy) best = res;
     }
     
     auto total_end = std::chrono::high_resolution_clock::now();
     double total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count();
-    std::cout << "[PROFILE] " << feature_name << " TOTAL: " << total_ms << " ms" << std::endl;
+    
+    std::ofstream log3("/tmp/ih_profile.log", std::ios::app);
+    log3 << "[PROFILE] " << feature_name << " TOTAL: " << total_ms << " ms" << std::endl;
+    log3 << "[PROFILE] ========== END " << feature_name << " ==========" << std::endl;
+    log3.close();
     
     return best;
 }
@@ -407,8 +418,11 @@ std::vector<BinarySplitResult> find_best_rules(
         return results;
     }
     
-    std::cout << "[PROFILE] find_best_rules START: rows=" << raw_data.size() 
-              << ", features=" << feature_mask.size() << std::endl;
+    std::ofstream log("/tmp/ih_profile.log", std::ios::app);
+    log << "[PROFILE] =========================================" << std::endl;
+    log << "[PROFILE] find_best_rules START: rows=" << raw_data.size() 
+        << ", features=" << feature_mask.size() << std::endl;
+    log.close();
     
     // Бинаризуем Y
     std::vector<int> y_binary = binarize_y(raw_data, y_index, y_class_low, y_class_high);
@@ -433,7 +447,10 @@ std::vector<BinarySplitResult> find_best_rules(
     
     // Обрабатываем количественные
     if (!quant_indices.empty()) {
-        std::cout << "[PROFILE] Processing " << quant_indices.size() << " quantitative features" << std::endl;
+        std::ofstream log2("/tmp/ih_profile.log", std::ios::app);
+        log2 << "[PROFILE] Processing " << quant_indices.size() << " quantitative features" << std::endl;
+        log2.close();
+        
         DiscretizationInfo disc_info = discretize_quantitative(raw_data, quant_indices, quant_sharpness);
         
         for (size_t f = 0; f < quant_indices.size(); f++) {
@@ -453,7 +470,10 @@ std::vector<BinarySplitResult> find_best_rules(
     
     // Обрабатываем категориальные
     if (!cat_indices.empty()) {
-        std::cout << "[PROFILE] Processing " << cat_indices.size() << " categorical features" << std::endl;
+        std::ofstream log3("/tmp/ih_profile.log", std::ios::app);
+        log3 << "[PROFILE] Processing " << cat_indices.size() << " categorical features" << std::endl;
+        log3.close();
+        
         for (size_t f = 0; f < cat_indices.size(); f++) {
             int col = cat_indices[f];
             std::vector<int> categorical_feature;
@@ -468,7 +488,10 @@ std::vector<BinarySplitResult> find_best_rules(
         }
     }
     
-    std::cout << "[PROFILE] find_best_rules END" << std::endl;
+    std::ofstream log4("/tmp/ih_profile.log", std::ios::app);
+    log4 << "[PROFILE] find_best_rules END" << std::endl;
+    log4 << "[PROFILE] =========================================" << std::endl;
+    log4.close();
     
     return results;
 }
