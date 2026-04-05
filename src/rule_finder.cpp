@@ -5,8 +5,6 @@
 #include <algorithm>
 #include <sstream>
 #include <limits>
-#include <chrono>
-#include <fstream>
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ СТРУКТУРЫ ====================
 
@@ -33,8 +31,6 @@ struct VectorEqual {
 // ==================== ВНУТРЕННЯЯ ФУНКЦИЯ ЭНТРОПИИ ====================
 
 double calc_entropy_internal(const std::vector<std::vector<int>>& data, const std::vector<int>& mask) {
-    auto start = std::chrono::high_resolution_clock::now();
-    
     size_t n_rows = data.size();
     if (n_rows == 0) return 0.0;
     
@@ -61,119 +57,17 @@ double calc_entropy_internal(const std::vector<std::vector<int>>& data, const st
         h_sum += c * std::log2(c);
     }
     
-    double result = (n * std::log2(n) - h_sum) / n;
-    
-    auto end = std::chrono::high_resolution_clock::now();
-    double ms = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0;
-    if (ms > 1.0) {
-        std::ofstream log("/tmp/ih_profile.log", std::ios::app);
-        log << "[PROFILE] calc_entropy_internal: " << ms << " ms, rows=" << n_rows << std::endl;
-        log.close();
-    }
-    
-    return result;
-}
-
-// ==================== ДИСКРЕТИЗАЦИЯ КОЛИЧЕСТВЕННЫХ ====================
-
-struct DiscretizationInfo {
-    std::vector<std::vector<int>> discrete_data;
-    std::vector<double> min_vals;
-    std::vector<double> max_vals;
-    std::vector<double> step;
-    std::vector<int> n_intervals;
-};
-
-DiscretizationInfo discretize_quantitative(
-    const std::vector<std::vector<float>>& raw_data,
-    const std::vector<int>& quant_indices,
-    const std::vector<double>& sharpness_list) {
-    
-    size_t rows = raw_data.size();
-    size_t n_quant = quant_indices.size();
-    
-    DiscretizationInfo info;
-    info.discrete_data.resize(rows, std::vector<int>(n_quant));
-    info.min_vals.resize(n_quant);
-    info.max_vals.resize(n_quant);
-    info.step.resize(n_quant);
-    info.n_intervals.resize(n_quant);
-    
-    for (size_t f = 0; f < n_quant; f++) {
-        int col = quant_indices[f];
-        double sharpness = sharpness_list[f];
-        
-        int n_int = static_cast<int>(std::round(2.0 / sharpness));
-        if (n_int < 1) n_int = 1;
-        info.n_intervals[f] = n_int;
-        
-        double min_val = raw_data[0][col];
-        double max_val = raw_data[0][col];
-        for (size_t i = 1; i < rows; i++) {
-            min_val = std::min(min_val, (double)raw_data[i][col]);
-            max_val = std::max(max_val, (double)raw_data[i][col]);
-        }
-        info.min_vals[f] = min_val;
-        info.max_vals[f] = max_val;
-        
-        double step = (max_val - min_val) / n_int;
-        if (step <= 0) step = 1.0;
-        info.step[f] = step;
-        
-        for (size_t i = 0; i < rows; i++) {
-            double val = raw_data[i][col];
-            int idx = static_cast<int>((val - min_val) / step);
-            if (idx >= n_int) idx = n_int - 1;
-            if (idx < 0) idx = 0;
-            info.discrete_data[i][f] = idx;
-        }
-    }
-    
-    return info;
-}
-
-// ==================== БИНАРИЗАЦИЯ Y ====================
-
-std::vector<int> binarize_y(
-    const std::vector<std::vector<float>>& raw_data,
-    int y_idx,
-    double low, double high) {
-    
-    size_t rows = raw_data.size();
-    std::vector<int> y_bin(rows);
-    
-    const double eps = 1e-9;
-    bool already_binary = true;
-    for (size_t i = 0; i < rows; i++) {
-        double val = raw_data[i][y_idx];
-        if (std::abs(val - 0.0) > eps && std::abs(val - 1.0) > eps) {
-            already_binary = false;
-            break;
-        }
-    }
-    
-    if (already_binary) {
-        for (size_t i = 0; i < rows; i++) {
-            y_bin[i] = static_cast<int>(raw_data[i][y_idx]);
-        }
-    } else {
-        for (size_t i = 0; i < rows; i++) {
-            double val = raw_data[i][y_idx];
-            y_bin[i] = (val >= low && val <= high) ? 1 : 0;
-        }
-    }
-    
-    return y_bin;
+    return (n * std::log2(n) - h_sum) / n;
 }
 
 // ==================== ОЦЕНКА ДЛЯ КОЛИЧЕСТВЕННОГО ПРИЗНАКА ====================
 
+// Для количественного признака: data_2d строится из уже дискретизированного столбца
 BinarySplitResult evaluate_quantitative_mask(
     const std::vector<int>& discrete_feature,
     const std::vector<int>& y_binary,
     const std::vector<int>& mask,
     int L, int R, bool inverted,
-    double interval_start, double interval_end,
     const std::string& feature_name) {
     
     size_t rows = discrete_feature.size();
@@ -204,9 +98,9 @@ BinarySplitResult evaluate_quantitative_mask(
     
     std::ostringstream rule;
     if (inverted) {
-        rule << feature_name << " NOT in [" << interval_start << ", " << interval_end << "] → class 1";
+        rule << feature_name << " NOT in interval [" << L << "," << R << "] → class 1";
     } else {
-        rule << feature_name << " in [" << interval_start << ", " << interval_end << "] → class 1";
+        rule << feature_name << " in interval [" << L << "," << R << "] → class 1";
     }
     rule << " (Rxy=" << Rxy << ")";
     
@@ -220,8 +114,8 @@ BinarySplitResult evaluate_quantitative_mask(
     res.Ixy = Ixy;
     res.class0_count = class0;
     res.class1_count = class1;
-    res.interval_start = interval_start;
-    res.interval_end = interval_end;
+    res.interval_start = static_cast<double>(L);
+    res.interval_end = static_cast<double>(R);
     res.feature_name = feature_name;
     res.rule_text = rule.str();
     
@@ -233,7 +127,7 @@ BinarySplitResult evaluate_quantitative_mask(
 BinarySplitResult find_best_quantitative(
     const std::vector<int>& discrete_feature,
     const std::vector<int>& y_binary,
-    double min_val, double step, int n_intervals,
+    int n_intervals,
     const std::string& feature_name) {
     
     BinarySplitResult best;
@@ -241,30 +135,49 @@ BinarySplitResult find_best_quantitative(
     
     for (int L = 0; L < n_intervals; L++) {
         for (int R = L; R < n_intervals; R++) {
+            // Маска для интервала [L, R]
             std::vector<int> mask1(n_intervals, 0);
             for (int k = L; k <= R; k++) mask1[k] = 1;
             
-            double start = min_val + L * step;
-            double end = min_val + (R + 1) * step;
-            
             BinarySplitResult res1 = evaluate_quantitative_mask(
-                discrete_feature, y_binary, mask1, L, R, false,
-                start, end, feature_name);
+                discrete_feature, y_binary, mask1, L, R, false, feature_name);
             
             if (res1.Rxy > best.Rxy) best = res1;
             
+            // Инвертированная маска (НЕ в интервале)
             std::vector<int> mask2(n_intervals, 1);
             for (int k = L; k <= R; k++) mask2[k] = 0;
             
             BinarySplitResult res2 = evaluate_quantitative_mask(
-                discrete_feature, y_binary, mask2, L, R, true,
-                start, end, feature_name);
+                discrete_feature, y_binary, mask2, L, R, true, feature_name);
             
             if (res2.Rxy > best.Rxy) best = res2;
         }
     }
     
     return best;
+}
+
+// ==================== ПЕРЕКОДИРОВКА КАТЕГОРИЙ В 0..K-1 ====================
+
+std::pair<std::vector<int>, int> renumber_categories(const std::vector<int>& raw_categories) {
+    std::unordered_map<int, int> code_map;
+    std::vector<int> encoded;
+    encoded.reserve(raw_categories.size());
+    
+    int next_code = 0;
+    for (int val : raw_categories) {
+        auto it = code_map.find(val);
+        if (it == code_map.end()) {
+            code_map[val] = next_code;
+            encoded.push_back(next_code);
+            next_code++;
+        } else {
+            encoded.push_back(it->second);
+        }
+    }
+    
+    return {encoded, next_code};
 }
 
 // ==================== ОЦЕНКА ДЛЯ КАТЕГОРИАЛЬНОГО ====================
@@ -274,8 +187,6 @@ BinarySplitResult evaluate_categorical_mask(
     const std::vector<int>& y_binary,
     const std::vector<int>& category_mask,
     const std::string& feature_name) {
-    
-    auto start = std::chrono::high_resolution_clock::now();
     
     size_t rows = categorical_feature.size();
     std::vector<std::vector<int>> data_2d(rows, std::vector<int>(2));
@@ -327,14 +238,7 @@ BinarySplitResult evaluate_categorical_mask(
     res.class1_count = class1;
     res.feature_name = feature_name;
     res.rule_text = rule.str();
-    
-    auto end = std::chrono::high_resolution_clock::now();
-    double ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    if (ms > 100) {
-        std::ofstream log("/tmp/ih_profile.log", std::ios::app);
-        log << "[PROFILE] evaluate_categorical_mask: " << ms << " ms, categories=" << category_mask.size() << std::endl;
-        log.close();
-    }
+    res.category_mask = category_mask;
     
     return res;
 }
@@ -346,152 +250,105 @@ BinarySplitResult find_best_categorical(
     const std::vector<int>& y_binary,
     const std::string& feature_name) {
     
-    auto total_start = std::chrono::high_resolution_clock::now();
+    // Перекодируем в последовательные 0,1,2,...,K-1
+    auto [encoded, n_categories] = renumber_categories(categorical_feature);
     
-    int n_categories = 0;
-    for (size_t i = 0; i < categorical_feature.size(); i++) {
-        n_categories = std::max(n_categories, categorical_feature[i] + 1);
+    // Защита от слишком большого числа категорий
+    if (n_categories > 12) {
+        BinarySplitResult dummy;
+        dummy.Rxy = 0.0;
+        dummy.feature_name = feature_name;
+        dummy.rule_text = feature_name + ": too many categories (" + std::to_string(n_categories) + "), skipping exhaustive search";
+        return dummy;
     }
-    
-    int n_combinations = (1 << n_categories) - 2;
-    
-    std::ofstream log("/tmp/ih_profile.log", std::ios::app);
-    log << "[PROFILE] ========== START " << feature_name << " ==========" << std::endl;
-    log << "[PROFILE] " << feature_name << ": n_categories=" << n_categories 
-        << ", combinations=" << n_combinations << std::endl;
-    log.close();
     
     BinarySplitResult best;
     best.Rxy = -1.0;
     
-    int processed = 0;
+    // Перебираем все непустые и неполные подмножества
     for (int subset = 1; subset < (1 << n_categories) - 1; subset++) {
-        processed++;
-        
-        auto subset_start = std::chrono::high_resolution_clock::now();
-        
         std::vector<int> mask(n_categories, 0);
         for (int k = 0; k < n_categories; k++) {
             if (subset >> k & 1) mask[k] = 1;
         }
         
         BinarySplitResult res = evaluate_categorical_mask(
-            categorical_feature, y_binary, mask, feature_name);
-        
-        auto subset_end = std::chrono::high_resolution_clock::now();
-        double subset_ms = std::chrono::duration_cast<std::chrono::milliseconds>(subset_end - subset_start).count();
-        
-        // Логируем каждую комбинацию (для категориальных их мало)
-        std::ofstream log2("/tmp/ih_profile.log", std::ios::app);
-        log2 << "[PROFILE] " << feature_name << " subset " << processed << "/" << n_combinations 
-             << ": " << subset_ms << " ms" << std::endl;
-        log2.close();
+            encoded, y_binary, mask, feature_name);
         
         if (res.Rxy > best.Rxy) best = res;
     }
     
-    auto total_end = std::chrono::high_resolution_clock::now();
-    double total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count();
-    
-    std::ofstream log3("/tmp/ih_profile.log", std::ios::app);
-    log3 << "[PROFILE] " << feature_name << " TOTAL: " << total_ms << " ms" << std::endl;
-    log3 << "[PROFILE] ========== END " << feature_name << " ==========" << std::endl;
-    log3.close();
-    
     return best;
 }
 
-// ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
+// ==================== ГЛАВНАЯ ФУНКЦИЯ (НОВАЯ СИГНАТУРА) ====================
 
 std::vector<BinarySplitResult> find_best_rules(
-    const std::vector<std::vector<float>>& raw_data,
+    const std::vector<std::vector<int>>& prepared_data,
     const std::vector<int>& feature_mask,
     int y_index,
-    double y_class_low,
-    double y_class_high,
-    const std::vector<double>& sharpness_list,
     const std::vector<std::string>& feature_names) {
     
     std::vector<BinarySplitResult> results;
     
-    if (raw_data.empty() || feature_mask.empty()) {
+    if (prepared_data.empty() || feature_mask.empty()) {
         return results;
     }
     
-    std::ofstream log("/tmp/ih_profile.log", std::ios::app);
-    log << "[PROFILE] =========================================" << std::endl;
-    log << "[PROFILE] find_best_rules START: rows=" << raw_data.size() 
-        << ", features=" << feature_mask.size() << std::endl;
-    log.close();
+    size_t n_rows = prepared_data.size();
+    size_t n_cols = prepared_data[0].size();
     
-    // Бинаризуем Y
-    std::vector<int> y_binary = binarize_y(raw_data, y_index, y_class_low, y_class_high);
-    
-    // Разделяем на количественные и категориальные
-    std::vector<int> quant_indices;
-    std::vector<double> quant_sharpness;
-    std::vector<int> cat_indices;
-    std::vector<std::string> quant_names;
-    std::vector<std::string> cat_names;
-    
-    for (size_t i = 0; i < feature_mask.size(); i++) {
-        if (feature_mask[i] == 1) {
-            quant_indices.push_back((int)i);
-            quant_sharpness.push_back(sharpness_list[quant_indices.size() - 1]);
-            quant_names.push_back(feature_names[i]);
-        } else if (feature_mask[i] == 2) {
-            cat_indices.push_back((int)i);
-            cat_names.push_back(feature_names[i]);
-        }
+    if (feature_mask.size() != feature_names.size() ||
+        feature_mask.size() != n_cols) {
+        return results;
     }
     
-    // Обрабатываем количественные
-    if (!quant_indices.empty()) {
-        std::ofstream log2("/tmp/ih_profile.log", std::ios::app);
-        log2 << "[PROFILE] Processing " << quant_indices.size() << " quantitative features" << std::endl;
-        log2.close();
-        
-        DiscretizationInfo disc_info = discretize_quantitative(raw_data, quant_indices, quant_sharpness);
-        
-        for (size_t f = 0; f < quant_indices.size(); f++) {
-            std::vector<int> discrete_feature;
-            for (size_t i = 0; i < disc_info.discrete_data.size(); i++) {
-                discrete_feature.push_back(disc_info.discrete_data[i][f]);
-            }
-            
-            BinarySplitResult res = find_best_quantitative(
-                discrete_feature, y_binary,
-                disc_info.min_vals[f], disc_info.step[f], disc_info.n_intervals[f],
-                quant_names[f]);
-            
-            results.push_back(res);
-        }
+    // Извлекаем Y (уже бинарный 0/1)
+    std::vector<int> y_binary(n_rows);
+    for (size_t i = 0; i < n_rows; i++) {
+        y_binary[i] = prepared_data[i][y_index];
     }
     
-    // Обрабатываем категориальные
-    if (!cat_indices.empty()) {
-        std::ofstream log3("/tmp/ih_profile.log", std::ios::app);
-        log3 << "[PROFILE] Processing " << cat_indices.size() << " categorical features" << std::endl;
-        log3.close();
-        
-        for (size_t f = 0; f < cat_indices.size(); f++) {
-            int col = cat_indices[f];
-            std::vector<int> categorical_feature;
-            for (size_t i = 0; i < raw_data.size(); i++) {
-                categorical_feature.push_back((int)raw_data[i][col]);
-            }
-            
-            BinarySplitResult res = find_best_categorical(
-                categorical_feature, y_binary, cat_names[f]);
-            
-            results.push_back(res);
+    // Определяем количество интервалов для каждого количественного признака
+    // (нужно для перебора)
+    std::vector<int> n_intervals_per_feature(n_cols, 0);
+    for (size_t col = 0; col < n_cols; col++) {
+        if (col == (size_t)y_index) continue;
+        int max_val = 0;
+        for (size_t i = 0; i < n_rows; i++) {
+            max_val = std::max(max_val, prepared_data[i][col]);
         }
+        n_intervals_per_feature[col] = max_val + 1;
     }
     
-    std::ofstream log4("/tmp/ih_profile.log", std::ios::app);
-    log4 << "[PROFILE] find_best_rules END" << std::endl;
-    log4 << "[PROFILE] =========================================" << std::endl;
-    log4.close();
+    // Обрабатываем каждый признак
+    for (size_t col = 0; col < n_cols; col++) {
+        if (col == (size_t)y_index) continue;
+        if (feature_mask[col] == 0) continue;  // исключенный признак
+        
+        std::string feature_name = feature_names[col];
+        
+        // Извлекаем столбец
+        std::vector<int> feature_col(n_rows);
+        for (size_t i = 0; i < n_rows; i++) {
+            feature_col[i] = prepared_data[i][col];
+        }
+        
+        BinarySplitResult res;
+        
+        if (feature_mask[col] == 1) {
+            // Количественный признак
+            int n_intervals = n_intervals_per_feature[col];
+            res = find_best_quantitative(feature_col, y_binary, n_intervals, feature_name);
+        } else if (feature_mask[col] == 2) {
+            // Категориальный признак
+            res = find_best_categorical(feature_col, y_binary, feature_name);
+        } else {
+            continue;  // неизвестный тип
+        }
+        
+        results.push_back(res);
+    }
     
     return results;
 }
