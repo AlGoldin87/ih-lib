@@ -1,14 +1,14 @@
 #include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
-#include <string>
-#include <vector>
-#include "entropy_core.hpp"
+#include <pybind11/numpy.h>
 #include "../include/rule_finder.hpp"
+#include "../include/entropy_core.hpp"
+#include <vector>
+#include <string>
 
 namespace py = pybind11;
 
-// ==================== СУЩЕСТВУЮЩАЯ ФУНКЦИЯ ====================
+// ==================== CALCULATE ENTROPY ====================
 double calculate_entropy_py(py::array_t<int> data, py::array_t<int> mask) {
     if (data.ndim() != 2) throw std::invalid_argument("Data must be 2D");
     if (mask.ndim() != 1) throw std::invalid_argument("Mask must be 1D");
@@ -30,51 +30,32 @@ double calculate_entropy_py(py::array_t<int> data, py::array_t<int> mask) {
     return calculate_entropy(data_ptr, n_rows, n_cols, mask_ptr, mask_size);
 }
 
-// ==================== НОВАЯ ФУНКЦИЯ ====================
+// ==================== НОВАЯ ФУНКЦИЯ FIND_BEST_RULES (новая сигнатура) ====================
 py::list find_best_rules_py(
-    py::array_t<float> raw_data,
-    py::list feature_mask_py,
+    py::array_t<int> prepared_data,
+    std::vector<int> feature_mask,
     int y_index,
-    double y_class_low,
-    double y_class_high,
-    py::list sharpness_list_py,
-    py::list feature_names_py) {
+    std::vector<std::string> feature_names) {
     
-    auto buf = raw_data.request();
-    if (buf.ndim != 2) throw std::invalid_argument("raw_data must be 2D");
+    auto buf = prepared_data.request();
+    if (buf.ndim != 2) throw std::invalid_argument("prepared_data must be 2D");
     
     size_t rows = buf.shape[0];
     size_t cols = buf.shape[1];
-    float* ptr = static_cast<float*>(buf.ptr);
+    int* ptr = static_cast<int*>(buf.ptr);
     
-    std::vector<std::vector<float>> data(rows, std::vector<float>(cols));
+    // Конвертируем numpy array в vector<vector<int>>
+    std::vector<std::vector<int>> data_vec(rows, std::vector<int>(cols));
     for (size_t i = 0; i < rows; i++) {
         for (size_t j = 0; j < cols; j++) {
-            data[i][j] = ptr[i * cols + j];
+            data_vec[i][j] = ptr[i * cols + j];
         }
     }
     
-    std::vector<int> feature_mask;
-    for (auto item : feature_mask_py) {
-        feature_mask.push_back(item.cast<int>());
-    }
+    // Вызываем C++ функцию с новой сигнатурой
+    auto results = find_best_rules(data_vec, feature_mask, y_index, feature_names);
     
-    std::vector<double> sharpness_list;
-    for (auto item : sharpness_list_py) {
-        sharpness_list.push_back(item.cast<double>());
-    }
-    
-    std::vector<std::string> feature_names;
-    for (auto item : feature_names_py) {
-        feature_names.push_back(item.cast<std::string>());
-    }
-    
-    auto results = find_best_rules(
-        data, feature_mask, y_index, 
-        y_class_low, y_class_high, 
-        sharpness_list, feature_names
-    );
-    
+    // Конвертируем результаты в Python list of dicts
     py::list py_results;
     for (const auto& res : results) {
         py::dict d;
@@ -91,6 +72,7 @@ py::list find_best_rules_py(
         d["interval_end"] = res.interval_end;
         d["feature_name"] = res.feature_name;
         d["rule_text"] = res.rule_text;
+        d["category_mask"] = res.category_mask;  // для категориальных
         py_results.append(d);
     }
     
@@ -106,8 +88,7 @@ PYBIND11_MODULE(_core, m) {
           "Calculate entropy for selected features");
     
     m.def("find_best_rules", &find_best_rules_py,
-          "Find optimal binary splits for multiple features",
-          py::arg("raw_data"), py::arg("feature_mask"), py::arg("y_index"),
-          py::arg("y_class_low"), py::arg("y_class_high"),
-          py::arg("sharpness_list"), py::arg("feature_names"));
+          py::arg("prepared_data"), py::arg("feature_mask"), 
+          py::arg("y_index"), py::arg("feature_names"),
+          "Find optimal binary rules for classification (prepared_data must be int32 from ih-prep)");
 }
