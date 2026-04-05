@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <sstream>
 #include <limits>
+#include <chrono>
+#include <iostream>
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ СТРУКТУРЫ ====================
 
@@ -29,7 +31,10 @@ struct VectorEqual {
 };
 
 // ==================== ВНУТРЕННЯЯ ФУНКЦИЯ ЭНТРОПИИ ====================
+
 double calc_entropy_internal(const std::vector<std::vector<int>>& data, const std::vector<int>& mask) {
+    auto start = std::chrono::high_resolution_clock::now();
+    
     size_t n_rows = data.size();
     if (n_rows == 0) return 0.0;
     
@@ -56,7 +61,15 @@ double calc_entropy_internal(const std::vector<std::vector<int>>& data, const st
         h_sum += c * std::log2(c);
     }
     
-    return (n * std::log2(n) - h_sum) / n;
+    double result = (n * std::log2(n) - h_sum) / n;
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0;
+    if (ms > 1.0) {
+        std::cout << "[PROFILE] calc_entropy_internal: " << ms << " ms, rows=" << n_rows << std::endl;
+    }
+    
+    return result;
 }
 
 // ==================== ДИСКРЕТИЗАЦИЯ КОЛИЧЕСТВЕННЫХ ====================
@@ -127,7 +140,6 @@ std::vector<int> binarize_y(
     size_t rows = raw_data.size();
     std::vector<int> y_bin(rows);
     
-    // Исправление 1: epsilon для проверки бинарности
     const double eps = 1e-9;
     bool already_binary = true;
     for (size_t i = 0; i < rows; i++) {
@@ -145,7 +157,6 @@ std::vector<int> binarize_y(
     } else {
         for (size_t i = 0; i < rows; i++) {
             double val = raw_data[i][y_idx];
-            // Исправление 2: нестрогие неравенства
             y_bin[i] = (val >= low && val <= high) ? 1 : 0;
         }
     }
@@ -262,6 +273,8 @@ BinarySplitResult evaluate_categorical_mask(
     const std::vector<int>& category_mask,
     const std::string& feature_name) {
     
+    auto start = std::chrono::high_resolution_clock::now();
+    
     size_t rows = categorical_feature.size();
     std::vector<std::vector<int>> data_2d(rows, std::vector<int>(2));
     
@@ -313,6 +326,12 @@ BinarySplitResult evaluate_categorical_mask(
     res.feature_name = feature_name;
     res.rule_text = rule.str();
     
+    auto end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    if (ms > 100) {
+        std::cout << "[PROFILE] evaluate_categorical_mask: " << ms << " ms, categories=" << category_mask.size() << std::endl;
+    }
+    
     return res;
 }
 
@@ -323,15 +342,27 @@ BinarySplitResult find_best_categorical(
     const std::vector<int>& y_binary,
     const std::string& feature_name) {
     
+    auto total_start = std::chrono::high_resolution_clock::now();
+    
     int n_categories = 0;
     for (size_t i = 0; i < categorical_feature.size(); i++) {
         n_categories = std::max(n_categories, categorical_feature[i] + 1);
     }
     
+    int n_combinations = (1 << n_categories) - 2;
+    
+    std::cout << "[PROFILE] " << feature_name << ": n_categories=" << n_categories 
+              << ", combinations=" << n_combinations << std::endl;
+    
     BinarySplitResult best;
     best.Rxy = -1.0;
     
+    int processed = 0;
     for (int subset = 1; subset < (1 << n_categories) - 1; subset++) {
+        processed++;
+        
+        auto subset_start = std::chrono::high_resolution_clock::now();
+        
         std::vector<int> mask(n_categories, 0);
         for (int k = 0; k < n_categories; k++) {
             if (subset >> k & 1) mask[k] = 1;
@@ -340,8 +371,21 @@ BinarySplitResult find_best_categorical(
         BinarySplitResult res = evaluate_categorical_mask(
             categorical_feature, y_binary, mask, feature_name);
         
+        auto subset_end = std::chrono::high_resolution_clock::now();
+        double subset_ms = std::chrono::duration_cast<std::chrono::milliseconds>(subset_end - subset_start).count();
+        
+        // Логируем каждую 5-ю комбинацию или если время > 1000 мс
+        if (processed % 5 == 0 || subset_ms > 1000) {
+            std::cout << "[PROFILE] " << feature_name << " subset " << processed << "/" << n_combinations 
+                      << ": " << subset_ms << " ms" << std::endl;
+        }
+        
         if (res.Rxy > best.Rxy) best = res;
     }
+    
+    auto total_end = std::chrono::high_resolution_clock::now();
+    double total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count();
+    std::cout << "[PROFILE] " << feature_name << " TOTAL: " << total_ms << " ms" << std::endl;
     
     return best;
 }
@@ -362,6 +406,9 @@ std::vector<BinarySplitResult> find_best_rules(
     if (raw_data.empty() || feature_mask.empty()) {
         return results;
     }
+    
+    std::cout << "[PROFILE] find_best_rules START: rows=" << raw_data.size() 
+              << ", features=" << feature_mask.size() << std::endl;
     
     // Бинаризуем Y
     std::vector<int> y_binary = binarize_y(raw_data, y_index, y_class_low, y_class_high);
@@ -386,6 +433,7 @@ std::vector<BinarySplitResult> find_best_rules(
     
     // Обрабатываем количественные
     if (!quant_indices.empty()) {
+        std::cout << "[PROFILE] Processing " << quant_indices.size() << " quantitative features" << std::endl;
         DiscretizationInfo disc_info = discretize_quantitative(raw_data, quant_indices, quant_sharpness);
         
         for (size_t f = 0; f < quant_indices.size(); f++) {
@@ -404,18 +452,23 @@ std::vector<BinarySplitResult> find_best_rules(
     }
     
     // Обрабатываем категориальные
-    for (size_t f = 0; f < cat_indices.size(); f++) {
-        int col = cat_indices[f];
-        std::vector<int> categorical_feature;
-        for (size_t i = 0; i < raw_data.size(); i++) {
-            categorical_feature.push_back((int)raw_data[i][col]);
+    if (!cat_indices.empty()) {
+        std::cout << "[PROFILE] Processing " << cat_indices.size() << " categorical features" << std::endl;
+        for (size_t f = 0; f < cat_indices.size(); f++) {
+            int col = cat_indices[f];
+            std::vector<int> categorical_feature;
+            for (size_t i = 0; i < raw_data.size(); i++) {
+                categorical_feature.push_back((int)raw_data[i][col]);
+            }
+            
+            BinarySplitResult res = find_best_categorical(
+                categorical_feature, y_binary, cat_names[f]);
+            
+            results.push_back(res);
         }
-        
-        BinarySplitResult res = find_best_categorical(
-            categorical_feature, y_binary, cat_names[f]);
-        
-        results.push_back(res);
     }
+    
+    std::cout << "[PROFILE] find_best_rules END" << std::endl;
     
     return results;
 }
