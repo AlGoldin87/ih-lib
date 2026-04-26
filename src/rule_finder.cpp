@@ -212,7 +212,7 @@ BinarySplitResult evaluate_categorical_mask(
     
     double Ixy = Hx + Hy - Hxy;
     if (Ixy < 0 && Ixy > -1e-10) Ixy = 0.0;
-    double Rxy = (Hx > 1e-10) ? Ixy / Hx : 0.0;
+    double Rxy = (Hx > 1e-10) ? Ixy / Hy : 0.0;
     
     std::ostringstream cat_list;
     cat_list << "{";
